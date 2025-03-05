@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-csv_file_path = "https://drive.google.com/file/d/18bCOnY5Kaepr2WdjBDqj069Ufp6EYT5d/view?usp=sharing"
+# csv_file_path = "https://drive.google.com/file/d/18bCOnY5Kaepr2WdjBDqj069Ufp6EYT5d/view?usp=sharing"
+csv_file_path = 'streamlit_data.csv'
 
 @st.cache_data
 def load_data(file_path):
@@ -43,8 +44,8 @@ def plot_predictions_over_time(df, vegetables, rolling_mean_window):
 
 df = preprocess_data(df)
 
-metric_file_path = "https://drive.google.com/file/d/1-1WOhm-JpKN4V6rwaRsn2z4ZLHTKBP1l/view?usp=sharing"
-
+# metric_file_path = "https://drive.google.com/file/d/1-1WOhm-JpKN4V6rwaRsn2z4ZLHTKBP1l/view?usp=sharing"
+metric_file_path = 'metric_summary.csv'
 metric_summary = pd.read_csv(metric_file_path)
 metric_summary.set_index('product', inplace=True)
 
