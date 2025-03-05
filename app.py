@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-!pip install --upgrade pip
 csv_file_path = "https://drive.google.com/file/d/18bCOnY5Kaepr2WdjBDqj069Ufp6EYT5d/view?usp=sharing"
 
 @st.cache_data
