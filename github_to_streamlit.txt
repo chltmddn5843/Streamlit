@@ -25,3 +25,23 @@
 # 이미 커밋 후에 삭제하려면..?
 - revert
 - reset : git bash 필요함
+
+# git bash 명령어
+- pwd : 현재 위치 확인
+- cd .. 상우
+- git clone
+
+# github 원격 저장소 연결
+- git remote add origin [url]
+- git remote -v : 원경 저장소 연결 확인
+
+# 변경된 파일 상태 확인
+- git status : 그린 - 정상 , 레드 - 비정상
+- git add [파일명] : 스테이징 영역에 추가
+- git add . or *로 한 번에 추가 가능
+* 스테이징 영역 : git commit이 안된 파일들을 임시로 담아두는 곳
+- git add로 추가하는 것임
+
+# commit / push / pull 
+- commit : 변경사항 저장소에 저장하기
+- push : 로컬 커밋 후 저장소에 옮기기 (세트임)
