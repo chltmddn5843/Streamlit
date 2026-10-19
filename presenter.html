@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#f4f5f8; --panel:#fff; --line:#e3e6ee; --text:#1d2230; --muted:#7a8296; --accent:#4f7cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif; color:var(--text); background:transparent; }
+  .top { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  button { border:1px solid var(--line); background:var(--panel); border-radius:8px; padding:8px 12px; cursor:pointer; font-size:14px; color:var(--text); }
+  button:hover { border-color:var(--accent); }
+  #mic { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; min-width:110px; }
+  #mic.on { background:#e5484d; border-color:#e5484d; }
+  #status { color:var(--muted); font-size:13px; }
+  #sim { flex:1; min-width:240px; padding:9px 12px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  .main { display:grid; grid-template-columns: 1fr 300px; gap:12px; }
+  .stage { background:var(--bg); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  #slide { width:100%; height:auto; display:block; background:#fff; border-radius:8px; box-shadow:0 2px 10px rgba(20,30,60,.08); }
+  .nav { display:flex; justify-content:center; align-items:center; gap:12px; margin-top:10px; color:var(--muted); font-size:13px; }
+  .side { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:6px; height:650px; overflow:hidden; }
+  .side h4 { margin:6px 0 2px; font-size:13px; color:var(--muted); font-weight:600; }
+  #live { flex:1.2; overflow:auto; font-size:13px; line-height:1.5; border:1px solid var(--line); border-radius:8px; padding:8px; }
+  #live p { margin:0 0 6px; } #interim { color:var(--muted); font-style:italic; }
+  #kw { display:flex; flex-wrap:wrap; gap:5px; min-height:40px; }
+  .chip { background:#eef2ff; color:#3a5bd9; border-radius:999px; padding:3px 9px; font-size:12px; }
+  .chip b { font-weight:700; margin-left:3px; color:#7a8cd6; }
+  #hist { flex:1; overflow:auto; display:flex; flex-direction:column; gap:4px; }
+  .h { text-align:left; font-size:12px; padding:6px 8px; }
+  .h.cur { border-color:var(--accent); background:#f2f5ff; }
+  .tag { color:var(--muted); font-size:11px; margin-right:4px; }
+  @media (max-width: 760px) { .main { grid-template-columns:1fr; } .side { height:auto; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <button id="mic">🎤 시작</button>
+  <input id="sim" placeholder="음성 대신 문장을 입력해 테스트 (Enter)">
+  <button id="clear">초기화</button>
+  <span id="status"></span>
+</div>
+<div class="main">
+  <div class="stage">
+    <svg id="slide" viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="nav"><button id="prev">◀</button><span id="pos">0 / 0</span><button id="next">▶</button></div>
+  </div>
+  <div class="side">
+    <h4>실시간 자막</h4>
+    <div id="live"><div id="lines"></div><div id="interim"></div></div>
+    <h4>발표 키워드</h4>
+    <div id="kw"></div>
+    <h4>슬라이드 기록</h4>
+    <div id="hist"></div>
+  </div>
+</div>
+
+<script>
+const CFG = __CONFIG__;
+const $ = id => document.getElementById(id);
+
+/* ---------- 키워드 추출 (app.py와 같은 규칙) ---------- */
+const PARTICLES = ["에서는","으로는","이라는","에서","으로","에게","까지","부터","이란","라는","하고","이랑","처럼","보다",
+  "은","는","이","가","을","를","의","에","로","와","과","도","만","랑"].sort((a,b)=>b.length-a.length);
+const STOP = new Set(("그리고 그래서 그러면 하지만 이제 저희 우리 여러분 이번 오늘 다음 먼저 그것 이것 저것 정말 아주 바로 " +
+  "또한 그냥 지금 여기 거기 무엇 어떻게 왜 때문 경우 정도 부분 내용 관련 대해 통해 위해 슬라이드 말씀 번째 첫째 둘째 셋째 넷째 마지막").split(" "));
+const VERB_END = /(습니다|입니다|니다|해요|어요|아요|하고|하며|해서|하는|했던|되는|하여|하면|겠습니다|됩니다|있는|없는|같은|위한|통해|대한|된다|한다)$/;
+const TRIG_WORDS = /비교|차이|공통|대비|교집합|단계|절차|프로세스|흐름|순서|과정|목차|구성|항목|요소|핵심|가지|정리|요약|키워드/;
+const ORD = /(?:첫\s?번째|첫째|두\s?번째|둘째|세\s?번째|셋째|네\s?번째|넷째|다섯\s?번째|여섯\s?번째|마지막으로)/;
+const RULES = [
+  ["venn", /비교|차이|공통|대비|vs|VS|교집합/],
+  ["flow", /단계|절차|프로세스|흐름|순서|파이프라인|과정/],
+  ["index", /목차|아젠다|agenda|다룰|소개할|항목/],
+  ["circles", /요소|구성요소|핵심|기둥|역량|가지/],
+  ["keywords", /정리하면|요약하면|정리하자면|키워드/],
+];
+const DEFAULT_TITLE = { flow:"프로세스", venn:"비교", circles:"핵심 요소", index:"목차", box:"핵심 메시지" };
+
+function nouns(text){
+  const out = [];
+  for (const tok of (text.match(/[가-힣A-Za-z0-9]+/g) || [])) {
+    let t = tok.replace(/(입니다|이에요|예요|이다|이고|이며|였습니다)$/, m => tok.length - m.length >= 2 ? "" : m);
+    for (const p of PARTICLES) { if (t.endsWith(p) && t.length - p.length >= 2) { t = t.slice(0, -p.length); break; } }
+    if (t.length < 2 || STOP.has(t) || VERB_END.test(t)) continue;
+    out.push(t);
+  }
+  return out;
+}
+const content = text => nouns(text).filter(n => !TRIG_WORDS.test(n));
+function detectType(t){ for (const [k, re] of RULES) if (re.test(t)) return k; return null; }
+
+/* ---------- 상태 ---------- */
+let slides = [], cur = -1;
+const kwCount = new Map();
+
+function push(s){ slides.push(s); cur = slides.length - 1; render(); }
+function go(d){ if (!slides.length) return; cur = Math.max(0, Math.min(slides.length - 1, cur + d)); render(); }
+function topKw(n){ return [...kwCount.entries()].sort((a,b)=>b[1]-a[1]).slice(0,n).map(e=>e[0]); }
+
+/* ---------- 발화 처리 ---------- */
+function process(raw){
+  const text = raw.trim(); if (!text) return;
+  const p = document.createElement("p"); p.textContent = text; $("lines").appendChild(p);
+  $("live").scrollTop = $("live").scrollHeight;
+  content(text).forEach(n => kwCount.set(n, (kwCount.get(n) || 0) + 1)); renderKw();
+
+  // 1) 음성 명령
+  if (/다음\s?슬라이드/.test(text)) return go(1);
+  if (/이전\s?슬라이드/.test(text)) return go(-1);
+
+  // 2) 미리 저장한 이미지 (파일명을 말하면)
+  for (const name in CFG.images) if (text.includes(name)) return push({ type:"image", title:name, image:name, items:[], source:"image" });
+
+  // 3) 스크립트 슬라이드 매칭
+  if (CFG.slides.length) {
+    let best = -1, bs = 0;
+    CFG.slides.forEach((s, i) => {
+      const sc = (s.keywords || []).filter(k => text.includes(k)).length + (text.includes(s.title) ? 2 : 0);
+      if (sc > bs) { bs = sc; best = i; }
+    });
+    if (bs >= CFG.threshold) {
+      if (!(slides[cur] && slides[cur].ref === best)) push({ ...CFG.slides[best], items:[...(CFG.slides[best].items||[])], ref:best });
+      return;
+    }
+  }
+
+  // 4) "첫 번째 ~, 두 번째 ~" → 현재 슬라이드에 항목 추가
+  const s = slides[cur];
+  if (ORD.test(text) && s && ["flow","index","circles"].includes(s.type)) {
+    const after = text.split(ORD).pop();
+    const label = content(after).slice(0, 2).join(" ") || content(text)[0];
+    if (label && !s.items.includes(label)) { s.items.push(label); render(); }
+    return;
+  }
+
+  // 5) 트리거 단어로 새 도형 슬라이드 생성
+  const t = detectType(text);
+  if (!t) return;
+  if (t === "keywords") return push({ type:"box", title:"핵심 키워드", items:topKw(6), source:"live" });
+
+  let title, items;
+  const phrases = text.split(/[,、]|그리고/).map(ph => content(ph).slice(0, 2).join(" ")).filter(Boolean);
+  if (t === "venn") {
+    const pairs = text.split(/(?<=[가-힣A-Za-z0-9])(?:와|과|랑|하고)\s|\s(?:vs|VS|대)\s/).map(ph => content(ph).slice(0, 3).join(" ")).filter(Boolean);
+    items = (pairs.length >= 2 ? pairs : phrases.length >= 2 ? phrases : content(text)).slice(0, 3);
+    title = items.length >= 2 ? items.slice(0, 2).join(" vs ") : "비교";
+  } else if (phrases.length >= 2) {
+    items = phrases.slice(0, 6); title = DEFAULT_TITLE[t];
+  } else {
+    const c = content(text); title = c[0] || DEFAULT_TITLE[t]; items = c.slice(1, 6);
+  }
+  push({ type:t, title, items, source:"live" });
+}
+
+/* ---------- SVG 렌더링 ---------- */
+const COLORS = ["#4f7cff","#ff7a59","#22b39a","#f2a93b","#9b6bff","#e85d9a"];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+function wrap(s, n){
+  s = String(s); if (s.length <= n) return [s];
+  let cut = s.lastIndexOf(" ", n); if (cut < n / 2) cut = n;
+  const rest = s.slice(cut).trim();
+  return [s.slice(0, cut).trim(), rest.length > n ? rest.slice(0, n - 1) + "…" : rest];
+}
+function txt(x, y, s, size, color = "#1d2230", n = 10, weight = 600){
+  const lines = wrap(s, n), lh = size * 1.25, y0 = y - (lines.length - 1) * lh / 2;
+  return lines.map((l, i) => `<text x="${x}" y="${y0 + i * lh}" font-size="${size}" fill="${color}" text-anchor="middle" dominant-baseline="central" font-weight="${weight}">${esc(l)}</text>`).join("");
+}
+const hint = msg => `<text x="480" y="300" font-size="20" fill="#9aa1b3" text-anchor="middle">${esc(msg)}</text>`;
+const ORD_HINT = "“첫 번째 ○○, 두 번째 ○○” 라고 말하면 항목이 추가돼요";
+
+function drawFlow(items){
+  if (!items.length) return hint(ORD_HINT);
+  const n = items.length, gap = 46, w = Math.min(220, (840 - (n - 1) * gap) / n), total = n * w + (n - 1) * gap, x0 = 480 - total / 2;
+  let g = "";
+  items.forEach((it, i) => {
+    const x = x0 + i * (w + gap), c = COLORS[i % COLORS.length];
+    g += `<rect x="${x}" y="230" width="${w}" height="130" rx="14" fill="${c}" fill-opacity=".12" stroke="${c}" stroke-width="2.5"/>`;
+    g += `<text x="${x + 16}" y="256" font-size="14" fill="${c}" font-weight="700">STEP ${i + 1}</text>`;
+    g += txt(x + w / 2, 305, it, w > 150 ? 24 : 18, "#1d2230", Math.max(4, Math.floor(w / 24)));
+    if (i < n - 1) g += `<path d="M${x + w + 8} 295 L${x + w + gap - 10} 295" stroke="#b8bfd0" stroke-width="3" marker-end="url(#arr)"/>`;
+  });
+  return g;
+}
+function drawVenn(items){
+  const its = items.length ? items : ["A", "B"];
+  const pos = its.length >= 3 ? [[400, 260], [560, 260], [480, 395]] : [[390, 310], [570, 310]];
+  const r = its.length >= 3 ? 145 : 175;
+  let g = "";
+  pos.forEach(([x, y], i) => g += `<circle cx="${x}" cy="${y}" r="${r}" fill="${COLORS[i]}" fill-opacity=".18" stroke="${COLORS[i]}" stroke-width="2.5"/>`);
+  pos.forEach(([x, y], i) => {
+    const dx = its.length >= 3 ? (x - 480) * 0.9 : (x - 480) * 0.8, dy = its.length >= 3 ? (y - 305) * 0.9 : 0;
+    g += txt(x + dx, y + dy, its[i] || "", 24, COLORS[i], 7, 700);
+  });
+  g += txt(480, its.length >= 3 ? 305 : 310, "공통", 18, "#5a6275", 4, 700);
+  return g;
+}
+function drawCircles(title, items){
+  let g = `<circle cx="480" cy="310" r="85" fill="#4f7cff"/>` + txt(480, 310, title, 22, "#fff", 6, 700);
+  if (!items.length) return g + `<text x="480" y="470" font-size="18" fill="#9aa1b3" text-anchor="middle">${esc(ORD_HINT)}</text>`;
+  const n = items.length;
+  items.forEach((it, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / n, x = 480 + 205 * Math.cos(a) * 1.25, y = 310 + 160 * Math.sin(a), c = COLORS[(i + 1) % COLORS.length];
+    g = `<line x1="480" y1="310" x2="${x}" y2="${y}" stroke="#d5dae6" stroke-width="2"/>` + g;
+    g += `<circle cx="${x}" cy="${y}" r="62" fill="${c}" fill-opacity=".14" stroke="${c}" stroke-width="2.5"/>` + txt(x, y, it, 18, "#1d2230", 5);
+  });
+  return g;
+}
+function drawIndex(items){
+  if (!items.length) return hint(ORD_HINT);
+  const step = Math.min(68, 360 / items.length);
+  return items.map((it, i) => {
+    const y = 160 + i * step, c = COLORS[i % COLORS.length];
+    return `<circle cx="120" cy="${y}" r="20" fill="${c}"/><text x="120" y="${y}" font-size="18" fill="#fff" text-anchor="middle" dominant-baseline="central" font-weight="700">${i + 1}</text>` +
+      `<text x="160" y="${y}" font-size="26" fill="#1d2230" dominant-baseline="central" font-weight="600">${esc(it)}</text>` +
+      `<line x1="160" y1="${y + step / 2}" x2="880" y2="${y + step / 2}" stroke="#eef0f5"/>`;
+  }).join("");
+}
+function drawBox(title, items){
+  let g = `<rect x="140" y="170" width="680" height="170" rx="20" fill="#4f7cff" fill-opacity=".08" stroke="#4f7cff" stroke-width="2"/>` + txt(480, 255, title, 40, "#1d2230", 14, 800);
+  let x = 480 - (items.reduce((s, it) => s + String(it).length * 18 + 40, 0) - 12) / 2;
+  items.forEach((it, i) => {
+    const w = String(it).length * 18 + 28, c = COLORS[i % COLORS.length];
+    g += `<rect x="${x}" y="380" width="${w}" height="44" rx="22" fill="${c}" fill-opacity=".15"/><text x="${x + w / 2}" y="402" font-size="18" fill="${c}" text-anchor="middle" dominant-baseline="central" font-weight="700">${esc(it)}</text>`;
+    x += w + 12;
+  });
+  return g;
+}
+
+function render(){
+  const svg = $("slide"), s = slides[cur];
+  let g = `<defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#b8bfd0"/></marker></defs><rect width="960" height="540" fill="#fff"/>`;
+  if (!s) {
+    g += txt(480, 250, "말하면 슬라이드가 생성됩니다", 34, "#1d2230", 30, 700);
+    g += `<text x="480" y="310" font-size="18" fill="#9aa1b3" text-anchor="middle">비교 · 단계 · 요소 · 목차 · 정리 같은 단어가 도형을 만들어요</text>`;
+  } else {
+    g += `<rect x="60" y="58" width="8" height="40" rx="4" fill="#4f7cff"/><text x="84" y="80" font-size="36" font-weight="800" fill="#1d2230" dominant-baseline="central">${esc(s.title)}</text>`;
+    g += `<text x="900" y="80" font-size="13" fill="#9aa1b3" text-anchor="end" dominant-baseline="central">${{ script:"스크립트", live:"실시간 생성", image:"저장 이미지" }[s.source] || ""}</text>`;
+    const img = s.image && CFG.images[s.image];
+    if (s.type === "image" || (img && !s.items.length)) g += img ? `<image href="${img}" x="80" y="125" width="800" height="380" preserveAspectRatio="xMidYMid meet"/>` : hint("이미지 없음");
+    else if (s.type === "flow") g += drawFlow(s.items);
+    else if (s.type === "venn") g += drawVenn(s.items);
+    else if (s.type === "circles") g += drawCircles(s.title.length > 8 ? "핵심" : s.title, s.items);
+    else if (s.type === "index") g += drawIndex(s.items);
+    else g += drawBox(s.title, s.items);
+    if (img && s.type !== "image" && s.items.length) g += `<image href="${img}" x="780" y="400" width="140" height="110" preserveAspectRatio="xMidYMid meet"/>`;
+  }
+  svg.innerHTML = g;
+  $("pos").textContent = `${slides.length ? cur + 1 : 0} / ${slides.length}`;
+  $("hist").innerHTML = slides.map((x, i) => `<button class="h ${i === cur ? "cur" : ""}" data-i="${i}"><span class="tag">${x.type}</span>${i + 1}. ${esc(x.title)}</button>`).join("");
+  const c = $("hist").querySelector(".cur"); if (c) c.scrollIntoView({ block:"nearest" });
+}
+function renderKw(){
+  $("kw").innerHTML = [...kwCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, v]) => `<span class="chip">${esc(k)}<b>${v}</b></span>`).join("");
+}
+
+/* ---------- 음성 인식 (Web Speech API) ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, running = false;
+const status = m => $("status").textContent = m;
+function updBtn(){ $("mic").textContent = running ? "⏹ 중지" : "🎤 시작"; $("mic").classList.toggle("on", running); }
+if (SR) {
+  rec = new SR(); rec.lang = CFG.lang; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) process(r[0].transcript); else interim += r[0].transcript;
+    }
+    $("interim").textContent = interim;
+  };
+  rec.onerror = e => {
+    if (e.error === "no-speech") return;
+    status("오류: " + e.error + (e.error === "not-allowed" ? " — 주소창의 마이크 권한을 허용해 주세요" : ""));
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") { running = false; updBtn(); }
+  };
+  rec.onend = () => { if (running) { try { rec.start(); } catch (_) {} } };
+  status("준비됨 · " + CFG.lang + (CFG.slides.length ? ` · 스크립트 슬라이드 ${CFG.slides.length}개` : ""));
+} else {
+  status("이 브라우저는 음성 인식을 지원하지 않아요 (Chrome/Edge 권장). 입력창으로 테스트하세요.");
+  $("mic").disabled = true;
+}
+$("mic").onclick = () => {
+  if (!rec) return;
+  running = !running; updBtn();
+  if (running) { try { rec.start(); status("듣는 중…"); } catch (_) {} } else { rec.stop(); status("중지됨"); }
+};
+$("sim").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing) { process(e.target.value); e.target.value = ""; } });
+$("prev").onclick = () => go(-1);
+$("next").onclick = () => go(1);
+$("hist").onclick = e => { const b = e.target.closest("button"); if (b) { cur = +b.dataset.i; render(); } };
+$("clear").onclick = () => { slides = []; cur = -1; kwCount.clear(); $("lines").innerHTML = ""; renderKw(); render(); };
+render();
+</script>
+</body>
+</html>
